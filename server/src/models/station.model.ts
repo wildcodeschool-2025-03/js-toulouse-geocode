@@ -1,5 +1,6 @@
 import type * as GeoJSON from "geojson";
 import { DataTypes, Model, Op, type Sequelize } from "sequelize";
+import type { ParsedHoraire } from "../tools/horairesParser";
 import type {
   StationAttributes,
   StationCreationAttributes,
@@ -64,6 +65,7 @@ export class Station
   public consolidated_is_code_insee_verified!: boolean | null;
   public consolidated_is_code_insee_modified!: boolean | null;
   public coordonnees_x_y!: string | null;
+  public consolidated_horaires!: ParsedHoraire[] | null;
   public geom!: GeoJSON.Point | null;
 
   public readonly createdAt!: Date;
@@ -269,6 +271,10 @@ export class Station
         },
         coordonnees_x_y: {
           type: DataTypes.STRING(255),
+          allowNull: true,
+        },
+        consolidated_horaires: {
+          type: DataTypes.JSONB,
           allowNull: true,
         },
         geom: {

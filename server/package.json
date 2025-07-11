@@ -7,7 +7,8 @@
     "migrate:dev": "cross-env NODE_ENV=development npx sequelize-cli db:migrate",
     "migrate:prod": "cross-env NODE_ENV=production npx sequelize-cli db:migrate",
     "start": "cross-env NODE_ENV=production tsx ./src/main.ts",
-    "test": "cross-env NODE_ENV=test jest --verbose"
+    "test": "cross-env NODE_ENV=test jest --verbose",
+    "consolidate:horaires": "cross-env NODE_ENV=development tsx --require ./env-loader.js src/data-processing/consolidateHoraires.ts"
   },
   "dependencies": {
     "@types/pg": "^8.15.4",

@@ -1,6 +1,7 @@
 import type * as GeoJSON from "geojson";
 import type { Optional } from "sequelize";
 import type { Literal } from "sequelize/types/utils";
+import type { ParsedHoraire } from "../../tools/horairesParser"; // <-- N'oubliez pas cet import !
 
 export interface AccessAttributes {
   id: string;
@@ -201,6 +202,7 @@ export interface StationAttributes {
   consolidated_longitude: number | null;
   consolidated_code_postal: string | null;
   consolidated_commune: string | null;
+  consolidated_horaires: ParsedHoraire[] | null;
   consolidated_is_lon_lat_correct: boolean | null;
   consolidated_is_code_insee_verified: boolean | null;
   consolidated_is_code_insee_modified: boolean | null;
@@ -264,6 +266,7 @@ export type StationCreationAttributes = Optional<
   | "consolidated_is_code_insee_verified"
   | "consolidated_is_code_insee_modified"
   | "coordonnees_x_y"
+  | "consolidated_horaires"
   | "geom"
 >;
 

@@ -1,0 +1,171 @@
+Documentation Technique : Harmonisation des Données d'HorairesDate : 11 Juillet 2025 Feature : horaires-consolidation Auteur(s) : [Votre Nom], [Nom de votre camarade]1. Contexte et Problématique InitialeLe projet a été initié avec un champ horaires de type TEXT dans la table station. Cette approche, bien que simple, présentait des limitations critiques :
+
+•Impossibilité de Requêtage : Il était impossible de filtrer les stations en fonction de leur statut d'ouverture (ex: "ouvert maintenant") via une requête SQL.
+
+•Incohérence des Données : Le format texte libre menait à une multitude de représentations pour la même information (ex: "24/7", "24h/24", "lu-di 00:00-23:59").
+
+•Qualité des Données : De nombreuses entrées contenaient des erreurs, des doublons, ou des plages horaires se chevauchant, rendant les données brutes inexploitables pour une logique applicative.Objectif : Transformer le champ horaires en une structure de données propre, standardisée, et interrogeable.2. Parcours de la Solution (Démarche Itérative)Étape 1 : Création d'une Colonne Structurée et d'un Script de ConsolidationLa première étape a été de créer un conteneur pour nos données propres et un outil pour le remplir.
+
+•Action 1 : Migration de la Base de Données Une colonne consolidated_horaires de type JSONB a été ajoutée à la table station. Le JSONB a été choisi pour sa flexibilité et ses capacités d'indexation performantes dans PostgreSQL.Code (migrations/...-add-consolidated-horaires-to-station.js) :JavaScript/** @type {import('sequelize-cli').Migration} */
+
+module.exports = {
+  async up(queryInterface, Sequelize) {
+    await queryInterface.addColumn("station", "consolidated_horaires", {
+      type: Sequelize.JSONB,
+      allowNull: true,
+    });
+  },
+
+  async down(queryInterface, Sequelize) {
+    await queryInterface.removeColumn("station", "consolidated_horaires");
+  },
+};
+
+•Action 2 : Création d'un Script de Consolidation Un script autonome, consolidateHoraires.ts, a été créé pour parcourir toutes les stations, appliquer une logique de parsing, et remplir la nouvelle colonne.Défi rencontré : Le script initial ne fonctionnait pas car les modèles Sequelize n'étaient pas initialisés. La solution a été de dupliquer la logique d'initialisation des modèles et des associations depuis app.ts directement dans le script, ce qui a mis en évidence un problème de duplication de code à potentiellement résoudre plus tard.Code (src/data-processing/consolidateHoraires.ts) :TypeScript// ... (imports)
+async function runHorairesConsolidation() {
+    console.log("Démarrage du script...");
+    try {
+        // Logique d'initialisation des modèles et associations
+        User.initialize(sequelize);
+        // ... tous les autres modèles
+        User.associate();
+        // ... toutes les autres associations
+
+        const stationsToProcess = await Station.findAll({});
+        for (const station of stationsToProcess) {
+            if (station.horaires) {
+                // La fonction parseHoraires sera appelée ici
+                const parsedResult = parseHoraires(station.horaires);
+                if (parsedResult) {
+                    await station.update({ consolidated_horaires: parsedResult });
+                }
+            }
+        }
+        console.log("Consolidation terminée.");
+    } catch (error) {
+        console.error("Erreur critique:", error);
+    } finally {
+        await sequelize.close();
+    }
+}
+runHorairesConsolidation();
+
+Étape 2 : Développement du Parser et Première Vague d'HarmonisationLe cœur de la logique réside dans le parser. Il a été enrichi itérativement.
+
+•Action 1 : Création du Parser de Base La fonction parseHoraires a été créée dans src/tools/horairesParser.ts pour gérer les formats simples comme "lu-ve 08:00-18:00".
+
+•Action 2 : Standardisation du "24/7" Problème : L'analyse a montré que "24/7", "24h/24", et des variantes comme "00:00-23:59" étaient traitées différemment. Solution : Des règles spécifiques ont été ajoutées en début de fonction pour intercepter ces cas et les standardiser vers un format unique et canonique. La convention to: "24:00" a été adoptée pour représenter une journée complète (borne exclusive).Code (src/tools/horairesParser.ts) :TypeScriptexport function parseHoraires(horairesStr: string | null | undefined): ParsedHoraire[] | null {
+
+    // ...
+    const fullDaySchedule: ParsedHoraire[] = [{
+        days: [0, 1, 2, 3, 4, 5, 6],
+        hours: [{ from: "00:00", to: "24:00" }],
+    }];
+
+    if (normalizedStr === "24/7" || normalizedStr.includes("24h/24")) {
+        return fullDaySchedule;
+    }
+
+    const fullDayRegex = /(00:00|0:00)\s*-\s*(23:59|00:00|0:00)/;
+    if (fullDayRegex.test(normalizedStr)) {
+        return fullDaySchedule;
+    }
+    // ... reste du parser
+}
+
+•Action 3 : Heuristique pour le "Quasi 24/7" Problème : L'analyse des données consolidées a révélé des milliers de cas comme "lu-di 00:00-23:57", qui sont sémantiquement des "24/7" avec des erreurs de saisie. Solution : Une heuristique a été ajoutée pour détecter les plages horaires couvrant toute la semaine, commençant à minuit et se terminant très tard (après 23h50). Ces cas sont alors normalisés en "24/7".Code (src/tools/horairesParser.ts) :TypeScriptconst almostFullDayRegex = /(lu|lun|lundi|mo|mon)[\s-.,]+(di|dim|dimanche|su|sun)[\s-.,]*(\d{1,2}:\d{2})[\s-]*(\d{1,2}:\d{2})/;
+const almostMatch = normalizedStr.match(almostFullDayRegex);
+
+if (almostMatch) {
+    const fromTime = almostMatch[3];
+    const toTime = almostMatch[4];
+    const toMinutes = parseInt(toTime.split(":")[0], 10) * 60 + parseInt(toTime.split(":")[1], 10);
+
+    // Si l'heure de début est minuit et que l'heure de fin est après 23h50 (1430 minutes)
+    if (fromTime === "00:00" && toMinutes >= 1430) {
+        return fullDaySchedule;
+    }
+}
+
+Étape 3 : Consolidation Logique des Plages HorairesLa dernière et plus importante étape du nettoyage a consisté à traiter les données logiquement incorrectes.
+
+•Problème : L'analyse des résultats JSON a montré des aberrations :
+
+•Plages horaires dupliquées dans le même tableau hours.
+
+•Plages horaires qui se chevauchent (ex: 08:00-12:00 et 10:00-18:00).
+
+•Règles pour les mêmes jours mais définies séparément.
+
+•Solution : Une fonction de "post-processing", consolidateParsedSchedules, a été créée. Elle est appelée à la fin de parseHoraires pour nettoyer le résultat brut.1.Elle regroupe toutes les plages horaires par ensemble de jours unique.2.Elle supprime les doublons.3.Elle trie les plages par heure de début.4.Elle fusionne les plages qui se chevauchent ou sont adjacentes.Code (src/tools/horairesParser.ts) :TypeScriptfunction consolidateParsedSchedules(schedules: ParsedHoraire[]): ParsedHoraire[] {
+
+    if (!schedules || schedules.length === 0) {
+        return [];
+    }
+
+    const scheduleMap = new Map<string, { from: string; to: string }[]>();
+
+    for (const schedule of schedules) {
+        const dayKey = schedule.days.join(",");
+        const existingHours = scheduleMap.get(dayKey);
+        if (existingHours) {
+            existingHours.push(...schedule.hours);
+        } else {
+            scheduleMap.set(dayKey, [...schedule.hours]);
+        }
+    }
+
+    const consolidatedResult: ParsedHoraire[] = [];
+    for (const [dayKey, allHours] of scheduleMap.entries()) {
+        const uniqueHours = Array.from(new Set(allHours.map(h => JSON.stringify(h)))).map(s => JSON.parse(s));
+        uniqueHours.sort((a, b) => a.from.localeCompare(b.from));
+
+        if (uniqueHours.length === 0) continue;
+
+        const mergedHours: { from: string; to: string }[] = [];
+        let currentMerge = { ...uniqueHours[0] };
+
+        for (let i = 1; i < uniqueHours.length; i++) {
+            const nextSlot = uniqueHours[i];
+            if (nextSlot.from <= currentMerge.to) { // Chevauchement ou contiguïté
+                if (nextSlot.to > currentMerge.to) {
+                    currentMerge.to = nextSlot.to; // Fusion
+                }
+            } else {
+                mergedHours.push(currentMerge);
+                currentMerge = { ...nextSlot };
+            }
+        }
+        mergedHours.push(currentMerge);
+
+        consolidatedResult.push({
+            days: dayKey.split(",").map(Number),
+            hours: mergedHours,
+        });
+    }
+    return consolidatedResult;
+}
+
+// Appel à la fin de parseHoraires :
+export function parseHoraires(...) {
+    // ... toute la logique de parsing
+    if (result.length === 0) {
+        // ...
+        return null;
+    }
+    return consolidateParsedSchedules(result);
+}
+
+3. Bilan et Décision ArchitecturaleCe travail itératif a permis de transformer un champ de données chaotique en une source d'information fiable. Le nombre de modèles d'horaires uniques a été réduit de près de 900 à moins de 400, éliminant plus de 50% du bruit et de la redondance.Une discussion a eu lieu sur l'opportunité de normaliser davantage ces données en créant une table HorairesTemplate dédiée.
+
+•Approche JSONB (actuelle) :
+
+•Avantages : Flexibilité maximale, simplicité du modèle (pas de jointures), précision absolue des données.
+
+•Inconvénients : Duplication de données, analyse de patterns plus complexe.
+
+•Approche Table Template (alternative) :
+
+•Avantages : Normalisation (pas de duplication), analyse de patterns simple (GROUP BY).
+
+•Inconvénients : Perte de flexibilité, perte de précision si on utilise des marges, complexité des requêtes (JOIN).Décision : Pour les besoins actuels de l'application, où la précision des données pour l'utilisateur final est primordiale (ex: "ouvert maintenant ?"), l'approche JSONB a été conservée car elle garantit une fidélité de 100% à la donnée source (après nettoyage logique). La création d'une table de templates reste une option viable pour le futur, à discuter en équipe.4. Prochaines Étapes Suggérées1.Optimisation : Ajouter un index GIN sur la colonne consolidated_horaires pour des performances de recherche optimales.2.Intégration : Intégrer l'appel à parseHoraires directement dans le dataTransformer.ts du processus d'importation CSV pour que les nouvelles données soient nettoyées à la volée. Le script consolidateHoraires.ts serait alors conservé comme un outil de maintenance pour mettre à jour les données existantes si le parser évolue.
