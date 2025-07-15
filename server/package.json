@@ -11,6 +11,8 @@
     "consolidate:horaires": "cross-env NODE_ENV=development tsx --require ./env-loader.js src/data-processing/consolidateHoraires.ts"
   },
   "dependencies": {
+    "@sentry/node": "^9.38.0",
+    "@sentry/profiling-node": "^9.38.0",
     "@types/pg": "^8.15.4",
     "@types/sequelize": "^4.28.20",
     "bcrypt": "^6.0.0",
